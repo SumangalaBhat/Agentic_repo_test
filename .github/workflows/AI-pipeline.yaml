@@ -27,7 +27,7 @@ jobs:
       high: ${{ steps.count.outputs.high }}
   
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
   
       - name: Install tools
         run: pip install semgrep jq
@@ -246,7 +246,7 @@ jobs:
     needs: create-incident
   
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
   
       - uses: actions/download-artifact@v4
         with:
@@ -321,7 +321,7 @@ jobs:
       fixed_file: ${{ steps.fix.outputs.fixed_file }}
   
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
   
       - uses: actions/download-artifact@v4
         with:
@@ -531,7 +531,7 @@ jobs:
       issue_number: ${{ steps.meta.outputs.issue }}
   
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
   
       - uses: actions/download-artifact@v4
         with:
@@ -741,7 +741,7 @@ jobs:
       issues: write
   
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
   
@@ -854,7 +854,7 @@ jobs:
       ########################################
       # 🔹 Checkout (required for pages)
       ########################################
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       ########################################
       # 🔹 Download ALL artifacts

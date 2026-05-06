@@ -22,7 +22,7 @@ jobs:
   setup:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: mkdir -p $REPORT_DIR $FIX_DIR
 
 # =========================
@@ -38,7 +38,7 @@ jobs:
       commit_id: ${{ steps.git.outputs.commit }}
   
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 2
   
@@ -64,7 +64,7 @@ jobs:
     needs: [setup, git-analysis]
   
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
   
       - name: Install Tools
         run: pip install semgrep jq
@@ -97,7 +97,7 @@ jobs:
     needs: setup
   
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
   
       - name: Run Dependency Check
         uses: dependency-check/Dependency-Check_Action@main
@@ -228,7 +228,7 @@ jobs:
       FIX_BRANCH: ai-secret-fix-${{ github.run_id }}
   
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
   
@@ -383,7 +383,7 @@ jobs:
     needs: ai-secret-fix
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Semgrep
         run: pip install semgrep jq
