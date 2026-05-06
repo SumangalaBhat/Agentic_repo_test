@@ -40,7 +40,7 @@ jobs:
           mkdir -p $REPORT_DIR
           semgrep --config=auto --json > $REPORT_DIR/semgrep.json || echo "{}" > $REPORT_DIR/semgrep.json
       - name: Upload Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: semgrep-report
           path: reports/
@@ -64,7 +64,7 @@ jobs:
           out: reports
 
       - name: Upload Dependency Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dependency-report
           path: reports/
@@ -93,7 +93,7 @@ jobs:
           echo "HIGH     : $HIGH"
           echo "TOTAL    : $TOTAL"
           echo "$TOTAL" > before_count.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: before-count
           path: before_count.txt
@@ -326,7 +326,7 @@ jobs:
 
 
       - name: Upload Fixed Code
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fixed-code
           path: ai-fixes/
@@ -488,7 +488,7 @@ jobs:
         run: |
           AFTER=$(jq '.results | length' after.json 2>/dev/null || echo 0)
           echo "$AFTER" > after_count.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: after-count
           path: after_count.txt

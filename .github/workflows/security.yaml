@@ -25,7 +25,7 @@ jobs:
           severity: 'HIGH,CRITICAL'
 
       - name: Upload Scan Report for Incident Job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: scan-results
           path: scan-report.json

@@ -48,7 +48,7 @@ jobs:
           echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
           echo "high=$HIGH" >> $GITHUB_OUTPUT
   
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: security-report
           path: reports/
@@ -93,7 +93,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: incident-report-json
           path: final/incident.json
@@ -233,7 +233,7 @@ jobs:
             vulnerabilities: $vulns
           }' > final/incident.json
   
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: incident-report-json
           path: final/
@@ -508,7 +508,7 @@ jobs:
       # 🔹 Upload Summary
       ########################################
       - name: Upload AI Fixed Code
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ai-fixed-code   # ✅ MUST MATCH download name
           path: |
@@ -696,7 +696,7 @@ jobs:
       # 🔹 Upload Summary
       ########################################
       - name: Upload Validation Summary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: validation-summary
           path: final/

@@ -60,7 +60,7 @@ jobs:
             | "\(.extra.severity) | \(.path) | \(.extra.message)"
           ' reports/semgrep.json > reports/web/report.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: security-report
           path: reports/
@@ -151,7 +151,7 @@ jobs:
           echo "📄 .env content:"
           cat "$ENV_FILE" || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: repo-after-secret-fix
           path: |
@@ -322,7 +322,7 @@ jobs:
       # -----------------------------
       # 📦 SAVE UPDATED REPO
       # -----------------------------
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: repo-after-ai-fix
           path: |
@@ -409,7 +409,7 @@ jobs:
           echo "$CRITICAL" > reports/after/critical.txt
 
       - name: Upload After Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: after-report
           path: reports/after/
