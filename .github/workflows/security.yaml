@@ -1,0 +1,72 @@
+name: Ollama AI Security Autopilot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pages: write
+
+jobs:
+  # Job 1: Vulnerability Scanning
+  vulnerability-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Scan Repository (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          format: 'json'
+          output: 'scan-report.json'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Upload Scan Report for Incident Job
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-results
+          path: scan-report.json
+          retention-days: 1
+
+  # Job 2: Incident Creation
+  create-incident:
+    needs: vulnerability-scan
+    runs-on: ubuntu-latest
+    outputs:
+      issue_number: ${{ steps.incident.outputs.issue_number }}
+      vuln_before: ${{ steps.incident.outputs.vuln_before }}
+    steps:
+      - name: Download Scan Results
+        uses: actions/download-artifact@v4
+        with:
+          name: scan-results
+
+      - name: Parse Report and Create GitHub Issue
+        id: incident
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Calculate vulnerability count from the downloaded JSON
+          VULN_COUNT=$(jq '.Results[].Vulnerabilities | length' scan-report.json | awk '{s+=$1} END {print s}')
+          
+          if [ "$VULN_COUNT" -gt 0 ]; then
+            # Ensure label exists
+            gh label create "security" --color "d73a4a" --description "Security vulnerabilities" || true
+            
+            # Create the issue
+            ISSUE_URL=$(gh issue create \
+              --title "Critical Vulnerability Incident - Build ${{ github.run_number }}" \
+              --body "Trivy found $VULN_COUNT high/critical issues. Triggering AI remediation agent." \
+              --label "security")
+            
+            # Extract issue number for downstream jobs
+            echo "issue_number=$(echo $ISSUE_URL | awk -F'/' '{print $NF}')" >> $GITHUB_OUTPUT
+            echo "vuln_before=$VULN_COUNT" >> $GITHUB_OUTPUT
+            echo "Incident created: $ISSUE_URL"
+          else
+            echo "No high or critical vulnerabilities found. Skipping incident creation."
+            echo "vuln_before=0" >> $GITHUB_OUTPUT
+          fi

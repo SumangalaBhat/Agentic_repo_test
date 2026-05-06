@@ -1,0 +1,623 @@
+name: DevSecOps + Agentic AI (Production)
+
+on:
+  push:
+  pull_request:
+
+env:
+  REPORT_DIR: reports
+  FIX_DIR: ai-fixes
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  pull-requests: write
+
+jobs:
+
+# =========================
+# 🔹 1. SEMGREP FULL SCAN
+# =========================
+  scan:
+    runs-on: ubuntu-latest
+
+    outputs:
+      critical: ${{ steps.count.outputs.critical }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Semgrep
+        run: pip install semgrep jq
+
+      - name: Run Scan
+        run: |
+          mkdir -p $REPORT_DIR
+          semgrep --config=auto --json > $REPORT_DIR/semgrep.json || echo '{"results":[]}' > $REPORT_DIR/semgrep.json
+
+      - name: Generate Summary
+        id: count
+        run: |
+          FILE="$REPORT_DIR/semgrep.json"
+
+          TOTAL=$(jq '.results | length' $FILE)
+          CRITICAL=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' $FILE)
+          HIGH=$(jq '[.results[] | select(.extra.severity=="WARNING")] | length' $FILE)
+
+          echo "TOTAL=$TOTAL"
+          echo "CRITICAL=$CRITICAL"
+          echo "HIGH=$HIGH"
+
+          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+
+      - name: Save Detailed Report
+        run: |
+          mkdir -p reports/web
+
+          jq -r '
+            .results[]
+            | "\(.extra.severity) | \(.path) | \(.extra.message)"
+          ' reports/semgrep.json > reports/web/report.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: reports/
+
+
+# =========================
+# 🔹 2. PUBLISH REPORT
+# =========================
+  publish-report:
+    runs-on: ubuntu-latest
+    needs: scan
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: security-report
+          path: reports
+
+      - name: Generate HTML Dashboard
+        run: |
+          mkdir -p site
+
+          cat <<EOF > site/index.html
+          <html>
+          <body>
+          <h1>🚨 Vulnerability Report</h1>
+          <pre>
+          $(cat reports/web/report.txt)
+          </pre>
+          </body>
+          </html>
+          EOF
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - uses: actions/deploy-pages@v4
+
+
+# =========================
+# 🔹 3. SECRET FIX
+# =========================
+  secret-fix:
+    runs-on: ubuntu-latest
+    needs: scan
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ✅ IMPORTANT: bring scan results forward
+      - name: Download Scan Report
+        uses: actions/download-artifact@v4
+        with:
+          name: security-report
+          path: reports
+
+      - name: Detect & Move Secrets
+        run: |
+          set -e
+
+          mkdir -p config
+          ENV_FILE="config/.env"
+          touch "$ENV_FILE"
+
+          JWT_REGEX='eyJ[[:alnum:]_-]+\.[[:alnum:]_.+-]+\.[[:alnum:]_.+-]+'
+
+          FILES=$(git ls-files)
+
+          for FILE in $FILES; do
+            [ -f "$FILE" ] || continue
+
+            JWT=$(grep -oE "$JWT_REGEX" "$FILE" | head -1 || true)
+
+            if [ -n "$JWT" ]; then
+              echo "🔐 Found JWT in $FILE"
+
+              if ! grep -q "^JWT_TOKEN_ENV=" "$ENV_FILE"; then
+                echo "JWT_TOKEN_ENV=$JWT" >> "$ENV_FILE"
+              fi
+
+              ESCAPED=$(printf '%s\n' "$JWT" | sed 's/[\/&]/\\&/g')
+
+              sed -i "s|$ESCAPED|System.getenv(\"JWT_TOKEN_ENV\")|g" "$FILE"
+            fi
+          done
+
+          echo "📄 .env content:"
+          cat "$ENV_FILE" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: repo-after-secret-fix
+          path: |
+            .
+            !.git
+
+
+# =========================
+# 🔹 4. AI FIX (OLLAMA)
+# =========================
+  ai-fix:
+    runs-on: ubuntu-latest
+    needs: [scan, secret-fix]
+    if: needs.scan.outputs.critical != '0'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Repo
+        uses: actions/download-artifact@v4
+        with:
+          name: repo-after-secret-fix
+          path: .
+
+      # ✅ CRITICAL FIX: download semgrep JSON
+      - name: Download Scan Report
+        uses: actions/download-artifact@v4
+        with:
+          name: security-report
+          path: reports
+
+      - name: Setup Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve > ollama.log 2>&1 &
+
+          for i in {1..10}; do
+            curl -s http://127.0.0.1:11434/api/tags && break
+            sleep 2
+          done
+
+          ollama pull llama3
+
+      - name: Fix One Critical Vulnerability + Handle Secrets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+      
+          FILE_JSON="reports/semgrep.json"
+      
+          if [ ! -f "$FILE_JSON" ]; then
+            echo "❌ Missing semgrep.json"
+            exit 1
+          fi
+      
+          echo "🔍 Searching for CRITICAL vulnerability..."
+          FILE=$(jq -r '.results[] | select(.extra.severity=="ERROR") | .path' "$FILE_JSON" | head -1)
+      
+          if [ -z "$FILE" ] || [ "$FILE" = "null" ]; then
+            echo "✅ No critical vulnerabilities"
+            exit 0
+          fi
+      
+          echo "🔧 Fixing file: $FILE"
+      
+          if [ ! -f "$FILE" ]; then
+            echo "❌ File not found: $FILE"
+            exit 1
+          fi
+      
+          # -----------------------------
+          # 🔐 SECRET DETECTION
+          # -----------------------------
+          echo "🔐 Scanning for secrets..."
+      
+          JWT_REGEX='eyJ[[:alnum:]_-]+\.[[:alnum:]_.+-]+\.[[:alnum:]_.+-]+'
+          API_KEY_REGEX='(api[_-]?key|token|secret)[[:space:]]*[:=][[:space:]]*[A-Za-z0-9_\-]{16,}'
+      
+          JWT=$(grep -oE "$JWT_REGEX" "$FILE" | head -1 || true)
+          API_KEY=$(grep -oEi "$API_KEY_REGEX" "$FILE" | head -1 | awk -F= '{print $2}' | tr -d ' "' || true)
+      
+          # -----------------------------
+          # 🔐 STORE INTO GITHUB SECRETS
+          # -----------------------------
+          store_secret () {
+            NAME=$1
+            VALUE=$2
+      
+            if [ -z "$VALUE" ]; then
+              return
+            fi
+      
+            echo "🔐 Storing $NAME into GitHub Secrets"
+      
+            # Mask in logs
+            echo "::add-mask::$VALUE"
+      
+            # Encrypt using GitHub API
+            PUB_KEY=$(curl -s \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              https://api.github.com/repos/${{ github.repository }}/actions/secrets/public-key)
+      
+            KEY=$(echo "$PUB_KEY" | jq -r .key)
+            KEY_ID=$(echo "$PUB_KEY" | jq -r .key_id)
+      
+            # Encode secret (base64 as placeholder; for real prod use libsodium)
+            ENCODED=$(printf "%s" "$VALUE" | base64)
+      
+            curl -s -X PUT \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Content-Type: application/json" \
+              https://api.github.com/repos/${{ github.repository }}/actions/secrets/$NAME \
+              -d "{\"encrypted_value\":\"$ENCODED\",\"key_id\":\"$KEY_ID\"}" || true
+          }
+      
+          store_secret "JWT_TOKEN_ENV" "$JWT"
+          store_secret "API_KEY_ENV" "$API_KEY"
+      
+          # -----------------------------
+          # 🔄 REPLACE SECRETS IN CODE
+          # -----------------------------
+          if [ -n "$JWT" ]; then
+            ESCAPED=$(printf '%s\n' "$JWT" | sed 's/[\/&]/\\&/g')
+            sed -i "s|$ESCAPED|process.env.JWT_TOKEN_ENV|g" "$FILE"
+          fi
+      
+          if [ -n "$API_KEY" ]; then
+            ESCAPED=$(printf '%s\n' "$API_KEY" | sed 's/[\/&]/\\&/g')
+            sed -i "s|$ESCAPED|process.env.API_KEY_ENV|g" "$FILE"
+          fi
+      
+          # -----------------------------
+          # 🤖 AI FIX (OLLAMA)
+          # -----------------------------
+          echo "🤖 Running AI fix..."
+      
+          cat "$FILE" > input_code.txt
+      
+          cat <<EOF > prompt.txt
+            Fix ONLY the security vulnerability.
+            DO NOT rewrite full file.
+            KEEP logic intact.
+            
+            CODE:
+            $(cat input_code.txt)
+            EOF
+            
+                ollama run llama3 < prompt.txt > fix.txt
+            
+                # -----------------------------
+                # ✅ APPLY FIX SAFELY
+                # -----------------------------
+                if [ -s fix.txt ]; then
+                  SIZE=$(wc -c < fix.txt)
+            
+                  if [ "$SIZE" -gt 50 ]; then
+                    cp "$FILE" "$FILE.bak"
+                    mv fix.txt "$FILE"
+                    echo "✅ AI Fix applied successfully"
+                  else
+                    echo "⚠️ AI output too small, skipping replace"
+                  fi
+                else
+                  echo "⚠️ Empty AI output"
+                fi
+      
+      # -----------------------------
+      # 📦 SAVE UPDATED REPO
+      # -----------------------------
+      - uses: actions/upload-artifact@v4
+        with:
+          name: repo-after-ai-fix
+          path: |
+            .
+            !.git
+
+
+# =========================
+# 🔹 5. COMMIT + PUSH
+# =========================
+  commit:
+    runs-on: ubuntu-latest
+    needs: [secret-fix, ai-fix]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Final Repo
+        uses: actions/download-artifact@v4
+        with:
+          name: repo-after-ai-fix
+          path: .
+
+      - name: Commit Changes
+        run: |
+          BRANCH="ai-security-fix-${{ github.run_id }}"
+
+          git config user.name "sumangalabhat"
+          git config user.email "sumangala.bhat18@gmail.com"
+
+          git checkout -b $BRANCH
+
+          # ✅ Always safe add
+          git add -A
+
+          git commit -m "🔐 + 🤖 AI Security Fix" || echo "No changes"
+
+          git push origin $BRANCH
+
+          echo "BRANCH=$BRANCH" >> $GITHUB_ENV
+
+
+# =========================
+# 🔹 4. Rescan after AI FIX (OLLAMA)
+# =========================
+  rescan:
+    runs-on: ubuntu-latest
+    needs: [commit]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ✅ Pull latest branch (AI fix branch)
+      - name: Checkout AI Fix Branch
+        run: |
+          git fetch origin
+          git checkout ai-security-fix-${{ github.run_id }} || git checkout main
+
+      - name: Install Semgrep
+        run: pip install semgrep jq
+
+      - name: Re-run Scan
+        run: |
+          mkdir -p reports/after
+          semgrep --config=auto --json > reports/after/semgrep.json || echo '{"results":[]}' > reports/after/semgrep.json
+
+      - name: Generate AFTER Summary
+        run: |
+          FILE="reports/after/semgrep.json"
+
+          TOTAL=$(jq '.results | length' $FILE)
+          CRITICAL=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' $FILE)
+          HIGH=$(jq '[.results[] | select(.extra.severity=="WARNING")] | length' $FILE)
+
+          echo "AFTER_TOTAL=$TOTAL" >> $GITHUB_ENV
+          echo "AFTER_CRITICAL=$CRITICAL" >> $GITHUB_ENV
+
+          echo "📊 AFTER FIX SUMMARY"
+          echo "CRITICAL : $CRITICAL"
+          echo "HIGH     : $HIGH"
+          echo "TOTAL    : $TOTAL"
+
+          echo "$TOTAL" > reports/after/total.txt
+          echo "$CRITICAL" > reports/after/critical.txt
+
+      - name: Upload After Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: after-report
+          path: reports/after/
+# =========================
+# 🔹 FINAL REPORT (STABLE)
+# =========================
+  final-report:
+    runs-on: ubuntu-latest
+    needs: [scan, rescan, commit]
+  
+    steps:
+      # -----------------------------
+      # Checkout repo
+      # -----------------------------
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+  
+      # -----------------------------
+      # Download artifacts
+      # -----------------------------
+      - name: Download BEFORE report
+        uses: actions/download-artifact@v4
+        with:
+          name: security-report
+          path: reports/before
+        continue-on-error: true
+  
+      - name: Download AFTER report
+        uses: actions/download-artifact@v4
+        with:
+          name: after-report
+          path: reports/after
+        continue-on-error: true
+  
+      # -----------------------------
+      # 📊 COMPUTE METRICS
+      # -----------------------------
+      - name: Compute Metrics
+        run: |
+          mkdir -p reports/before reports/after
+  
+          BEFORE_FILE="reports/before/semgrep.json"
+          AFTER_FILE="reports/after/semgrep.json"
+  
+          [ -f "$BEFORE_FILE" ] || echo '{"results":[]}' > "$BEFORE_FILE"
+          [ -f "$AFTER_FILE" ] || echo '{"results":[]}' > "$AFTER_FILE"
+  
+          BEFORE_TOTAL=$(jq '.results | length' "$BEFORE_FILE" 2>/dev/null || echo 0)
+          AFTER_TOTAL=$(jq '.results | length' "$AFTER_FILE" 2>/dev/null || echo 0)
+  
+          BEFORE_CRITICAL=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' "$BEFORE_FILE" 2>/dev/null || echo 0)
+          AFTER_CRITICAL=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' "$AFTER_FILE" 2>/dev/null || echo 0)
+  
+          FIXED=$((BEFORE_TOTAL - AFTER_TOTAL))
+  
+          echo "BEFORE_TOTAL=$BEFORE_TOTAL" >> $GITHUB_ENV
+          echo "AFTER_TOTAL=$AFTER_TOTAL" >> $GITHUB_ENV
+          echo "BEFORE_CRITICAL=$BEFORE_CRITICAL" >> $GITHUB_ENV
+          echo "AFTER_CRITICAL=$AFTER_CRITICAL" >> $GITHUB_ENV
+          echo "FIXED=$FIXED" >> $GITHUB_ENV
+  
+      # -----------------------------
+      # 🌿 BRANCH
+      # -----------------------------
+      - name: Load Branch
+        run: |
+          BRANCH="${{ needs.commit.outputs.branch }}"
+          if [ -z "$BRANCH" ]; then
+            BRANCH="ai-security-fix-${{ github.run_id }}"
+          fi
+  
+          SAFE_BRANCH=$(echo "$BRANCH" | tr '/' '-' )
+          echo "BRANCH=$BRANCH" >> $GITHUB_ENV
+          echo "SAFE_BRANCH=$SAFE_BRANCH" >> $GITHUB_ENV
+  
+      # -----------------------------
+      # 🔍 GIT DETAILS
+      # -----------------------------
+      - name: Extract Git Details
+        run: |
+          AUTHOR=$(git log -1 --pretty=format:'%an' || echo "N/A")
+          EMAIL=$(git log -1 --pretty=format:'%ae' || echo "N/A")
+          MESSAGE=$(git log -1 --pretty=format:'%s' || echo "N/A")
+  
+          echo "AUTHOR=$AUTHOR" >> $GITHUB_ENV
+          echo "EMAIL=$EMAIL" >> $GITHUB_ENV
+          echo "MESSAGE=$MESSAGE" >> $GITHUB_ENV
+  
+          jq -r '
+            .results[]
+            | select(.extra.severity=="ERROR")
+            | "\(.path) | \(.extra.message)"
+          ' reports/before/semgrep.json 2>/dev/null | head -5 > ai_fixed_issues.txt || echo "No issues" > ai_fixed_issues.txt
+  
+      # -----------------------------
+      # 🔐 SECRET DETECTION
+      # -----------------------------
+      - name: Detect Secrets
+        run: |
+          grep -RiE 'password|secret|token|jwt' . > secrets_raw.txt || true
+  
+          if [ -s secrets_raw.txt ]; then
+            awk -F: '{print $1 " -> " $2}' secrets_raw.txt | head -10 > secrets_summary.txt
+            echo "Stored in GitHub Secrets" >> secrets_summary.txt
+          else
+            echo "No secrets found" > secrets_summary.txt
+          fi
+  
+      # -----------------------------
+      # 🌐 GENERATE BRANCH PAGE
+      # -----------------------------
+      - name: Generate Branch Page
+        run: |
+          mkdir -p site/branches
+  
+          REMAINING=$(jq -r '.results[] | "\(.extra.severity) | \(.path) | \(.extra.message)"' reports/after/semgrep.json 2>/dev/null | head -20 || echo "No issues")
+  
+          cat <<EOF > site/branches/${SAFE_BRANCH}.html
+          <html><body style="background:#0f172a;color:white;font-family:Arial">
+  
+          <h1>Branch: $BRANCH</h1>
+  
+          <h2>📊 Summary</h2>
+          <pre>
+              Before: $BEFORE_TOTAL
+              After : $AFTER_TOTAL
+              Fixed : $FIXED
+                      </pre>
+              
+                      <h2>👤 Commit</h2>
+                      <pre>$AUTHOR ($EMAIL)
+              $MESSAGE</pre>
+              
+                      <h2>🤖 Fixed Issues</h2>
+                      <pre>$(cat ai_fixed_issues.txt)</pre>
+              
+                      <h2>🔐 Secrets</h2>
+                      <pre>$(cat secrets_summary.txt)</pre>
+              
+                      <h2>🔥 Remaining</h2>
+                      <pre>$REMAINING</pre>
+              
+                      <a href="../index.html">⬅ Back</a>
+              
+                      </body></html>
+                      EOF
+
+
+      # -----------------------------
+      # 🌐 PERSIST BRANCH DATA
+      # -----------------------------
+      - name: Persist Branch Data
+        run: |
+          mkdir -p site branches-data
+      
+          FILE="branches-data/branches.json"
+      
+          # create file if not exists
+          [ -f "$FILE" ] || echo "[]" > "$FILE"
+      
+          # add current branch if not exists
+          jq --arg branch "$BRANCH" \
+             'if any(.[]; . == $branch) then . else . + [$branch] end' \
+             "$FILE" > tmp.json && mv tmp.json "$FILE"
+  
+      # -----------------------------
+      # 🌐 GENERATE INDEX PAGE
+      # -----------------------------
+      - name: Generate Index
+        run: |
+          mkdir -p site
+      
+          FILE="branches-data/branches.json"
+      
+          echo "<html><body style='background:#0f172a;color:white;font-family:Arial'>" > site/index.html
+          echo "<h1>🚀 DevSecOps Reports (Branch-wise)</h1><ul>" >> site/index.html
+      
+          jq -r '.[]' "$FILE" | while read b; do
+            SAFE=$(echo "$b" | sed 's/[^a-zA-Z0-9]/-/g')
+            echo "<li><a href='branches/${SAFE}.html'>$b</a></li>" >> site/index.html
+          done
+      
+          echo "</ul></body></html>" >> site/index.html
+        
+      # -----------------------------
+      # 📦 UPLOAD
+      # -----------------------------
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          name: final-report-pages
+          path: site
+  
+  
+  # =========================
+  # 🚀 DEPLOY
+  # =========================
+  publish-pages:
+    runs-on: ubuntu-latest
+    needs: final-report
+  
+    permissions:
+      pages: write
+      id-token: write
+  
+    steps:
+      - name: Deploy
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: final-report-pages

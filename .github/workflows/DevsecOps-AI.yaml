@@ -1,0 +1,521 @@
+name: DevSecOps AI Agent Pipeline
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+
+env:
+  REPORT_DIR: reports
+  FIX_BRANCH: ai-fix-${{ github.run_id }}
+
+jobs:
+
+# =========================
+# 🔹 1. SETUP
+# =========================
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p $REPORT_DIR $FIX_DIR
+
+# =========================
+# 🔹 2. CHECKOUT + CHANGE ANALYSIS
+# =========================
+  git-analysis:
+    runs-on: ubuntu-latest
+    needs: setup
+  
+    outputs:
+      changed_files: ${{ steps.git.outputs.files }}
+      author: ${{ steps.git.outputs.author }}
+      commit_id: ${{ steps.git.outputs.commit }}
+  
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+  
+      - id: git
+        run: |
+          FILES=$(git diff --name-only HEAD~1 HEAD | tr '\n' ' ')
+          AUTHOR=$(git log -1 --pretty=format:'%an <%ae>')
+          COMMIT=$(git rev-parse HEAD)
+  
+          echo "files=$FILES" >> $GITHUB_OUTPUT
+          echo "author=$AUTHOR" >> $GITHUB_OUTPUT
+          echo "commit=$COMMIT" >> $GITHUB_OUTPUT
+  
+          echo "🔍 Changed Files: $FILES"
+          echo "👤 Author: $AUTHOR"
+          echo "🔗 Commit: $COMMIT"
+
+# =========================
+# 🔹 3. SEMGREP (Code Scan)
+# =========================
+  semgrep:
+    runs-on: ubuntu-latest
+    needs: [setup, git-analysis]
+  
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Install Tools
+        run: pip install semgrep jq
+  
+      - name: Run FULL Scan
+        run: |
+          mkdir -p reports
+          semgrep scan --config=auto --json . > reports/full.json || echo '{"results":[]}' > reports/full.json
+  
+      - name: Run RECENT CHANGES Scan
+        run: |
+          FILES="${{ needs.git-analysis.outputs.changed_files }}"
+  
+          if [ -z "$FILES" ]; then
+            echo '{"results":[]}' > reports/recent.json
+          else
+            semgrep scan --config=auto --json $FILES > reports/recent.json || echo '{"results":[]}' > reports/recent.json
+          fi
+  
+      - uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report
+          path: reports/
+
+# =========================
+# 🔹 4. DEPENDENCY CHECK
+# =========================
+  dependency:
+    runs-on: ubuntu-latest
+    needs: setup
+  
+    steps:
+      - uses: actions/checkout@v4
+  
+      - name: Run Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: app
+          path: .
+          format: JSON
+          out: reports
+  
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dependency-report
+          path: reports/
+# =========================
+# 🔹 5. SUMMARY (BEFORE FIX)
+# =========================
+  summary:
+    runs-on: ubuntu-latest
+    needs: [semgrep, dependency, git-analysis]
+  
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: semgrep-report
+          path: reports
+  
+      - uses: actions/download-artifact@v4
+        with:
+          name: dependency-report
+          path: reports
+  
+      - name: Generate Unified Summary
+        run: |
+          echo "🚨 DEVSECOPS SECURITY REPORT"
+          echo "================================================"
+  
+          #################################
+          # 🔹 FUNCTION: NORMALIZE SEVERITY
+          #################################
+          normalize() {
+            jq -r '
+              .results[]
+              | ( .extra.severity // "LOW" ) as $s
+              | if $s == "ERROR" then "CRITICAL"
+                elif $s == "WARNING" then "HIGH"
+                elif $s == "INFO" then "MEDIUM"
+                else "LOW"
+                end
+            ' "$1"
+          }
+  
+          #################################
+          # 🔹 FULL CODE VULNERABILITIES
+          #################################
+          FULL=$(normalize reports/full.json)
+  
+          FULL_CRIT=$(echo "$FULL" | grep -c CRITICAL || true)
+          FULL_HIGH=$(echo "$FULL" | grep -c HIGH || true)
+          FULL_MED=$(echo "$FULL" | grep -c MEDIUM || true)
+          FULL_LOW=$(echo "$FULL" | grep -c LOW || true)
+          FULL_TOTAL=$((FULL_CRIT + FULL_HIGH + FULL_MED + FULL_LOW))
+  
+          #################################
+          # 🔹 RECENT COMMIT VULNERABILITIES
+          #################################
+          RECENT=$(normalize reports/recent.json)
+  
+          REC_CRIT=$(echo "$RECENT" | grep -c CRITICAL || true)
+          REC_HIGH=$(echo "$RECENT" | grep -c HIGH || true)
+          REC_MED=$(echo "$RECENT" | grep -c MEDIUM || true)
+          REC_LOW=$(echo "$RECENT" | grep -c LOW || true)
+          REC_TOTAL=$((REC_CRIT + REC_HIGH + REC_MED + REC_LOW))
+  
+          #################################
+          # 🔹 DEPENDENCY VULNERABILITIES
+          #################################
+          DEP_CRIT=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="CRITICAL")] | length' reports/dependency-check-report.json)
+          DEP_HIGH=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="HIGH")] | length' reports/dependency-check-report.json)
+          DEP_MED=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="MEDIUM")] | length' reports/dependency-check-report.json)
+          DEP_LOW=$(jq '[.dependencies[]?.vulnerabilities[]? | select(.severity=="LOW")] | length' reports/dependency-check-report.json)
+          DEP_TOTAL=$((DEP_CRIT + DEP_HIGH + DEP_MED + DEP_LOW))
+  
+          #################################
+          # 🔹 PRINT REPORT
+          #################################
+          echo ""
+          echo "📦 FULL REPOSITORY (CODE)"
+          echo "CRITICAL : $FULL_CRIT"
+          echo "HIGH     : $FULL_HIGH"
+          echo "MEDIUM   : $FULL_MED"
+          echo "LOW      : $FULL_LOW"
+          echo "TOTAL    : $FULL_TOTAL"
+  
+          echo ""
+          echo "🆕 RECENT COMMIT (CODE)"
+          echo "CRITICAL : $REC_CRIT"
+          echo "HIGH     : $REC_HIGH"
+          echo "MEDIUM   : $REC_MED"
+          echo "LOW      : $REC_LOW"
+          echo "TOTAL    : $REC_TOTAL"
+  
+          echo ""
+          echo "📚 DEPENDENCIES"
+          echo "CRITICAL : $DEP_CRIT"
+          echo "HIGH     : $DEP_HIGH"
+          echo "MEDIUM   : $DEP_MED"
+          echo "LOW      : $DEP_LOW"
+          echo "TOTAL    : $DEP_TOTAL"
+  
+          echo ""
+          echo "👤 AUTHOR: ${{ needs.git-analysis.outputs.author }}"
+          echo "🔗 COMMIT: ${{ needs.git-analysis.outputs.commit_id }}"
+  
+  
+      - uses: actions/upload-artifact@v4
+        with:
+          name: full-summary
+          path: reports/
+# =========================
+# 🔹 4. AI SECRET FIX (AUTO)
+# =========================
+  ai-secret-fix:
+    runs-on: ubuntu-latest
+    needs: semgrep
+  
+    env:
+      REPORT_DIR: reports
+      FIX_BRANCH: ai-secret-fix-${{ github.run_id }}
+  
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+  
+      - uses: actions/download-artifact@v4
+        with:
+          name: semgrep-report
+          path: reports
+  
+  # =========================
+  # 🔹 Install Ollama
+  # =========================
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          nohup ollama serve > ollama.log 2>&1 &
+          sleep 10
+          ollama pull llama3
+  
+  # =========================
+  # 🔍 Find File with Hardcoded Secret
+  # =========================
+      - name: Select File with Hardcoded Data
+        run: |
+          set -e
+  
+          FILE="$REPORT_DIR/recent.json"
+  
+          if [ ! -f "$FILE" ]; then
+            echo "❌ No Semgrep report found"
+            exit 1
+          fi
+  
+          # Extract files with potential secrets
+          jq -r '
+            .results[]
+            | select(.extra.message | test("(?i)secret|password|token|api key"))
+            | .path
+          ' "$FILE" | sort -u > candidates.txt
+  
+          if [ ! -s candidates.txt ]; then
+            echo "⚠️ No hardcoded secrets found"
+            echo "skip_pr=true" >> $GITHUB_ENV
+            exit 0
+          fi
+  
+          TARGET_FILE=$(head -n 1 candidates.txt)
+          echo "TARGET_FILE=$TARGET_FILE" >> $GITHUB_ENV
+  
+          echo "✅ Selected file: $TARGET_FILE"
+  
+  # =========================
+  # 🌿 Create Branch
+  # =========================
+      - name: Create Branch
+        run: |
+          git checkout -b $FIX_BRANCH
+  
+  # =========================
+  # 🔐 Detect & Fix Secret
+  # =========================
+      - name: Fix Hardcoded Secret
+        run: |
+          set -e
+  
+          FILE="$TARGET_FILE"
+  
+          echo "Scanning file: $FILE"
+  
+          # Extract possible secret lines
+          MATCH=$(grep -nEi '(password|secret|token|api[_-]?key)\s*=\s*".+"' "$FILE" | head -n 1 || true)
+  
+          if [ -z "$MATCH" ]; then
+            echo "⚠️ No direct hardcoded secret pattern found, using AI fallback"
+            
+            SNIPPET=$(head -n 50 "$FILE")
+  
+            PROMPT=$(cat <<EOF
+            Find and fix any hardcoded secrets in this Java code.
+
+            Rules:
+            - Move secrets to .env file and store the secrets in .env file
+            - Replace with System.getenv()
+            - Keep logic unchanged
+            - Return ONLY fixed code
+            
+            $SNIPPET
+            EOF
+            )
+            
+                      FIXED=$(echo "$PROMPT" | ollama run llama3)
+            
+                      echo "$FIXED" > "$FILE"
+            
+                    else
+                      LINE_NUM=$(echo "$MATCH" | cut -d: -f1)
+                      LINE_CODE=$(echo "$MATCH" | cut -d: -f2-)
+            
+                      echo "🔐 Found hardcoded secret at line $LINE_NUM"
+            
+                      VALUE=$(echo "$LINE_CODE" | grep -oE '"[^"]+"' | tr -d '"')
+                      KEY=$(echo "$LINE_CODE" | grep -oiE '(password|secret|token|api[_-]?key)' | head -1 | tr '[:lower:]' '[:upper:]')
+            
+                      VAR_NAME="${KEY}_ENV"
+            
+                      mkdir -p config
+                      touch config/.env
+            
+                      echo "$VAR_NAME=$VALUE" >> config/.env
+            
+                      # Replace line safely
+                      sed -i "${LINE_NUM}s|\"$VALUE\"|System.getenv(\"$VAR_NAME\")|g" "$FILE"
+            
+                      echo "✅ Secret moved to .env"
+                    fi
+  
+  # =========================
+  # 💾 Commit Changes
+  # =========================
+      - name: Commit Changes
+        run: |
+          git config user.name "SumangalaBhat"
+          git config user.email "Sumangala.bhat18@gmail.com"
+  
+          echo "config/.env" >> .gitignore
+  
+          git add .
+  
+          if git diff --cached --quiet; then
+            echo "⚠️ No changes made"
+            echo "skip_pr=true" >> $GITHUB_ENV
+            exit 0
+          fi
+  
+          git commit -m "🔐 AI Fix: Hardcoded secret moved to env"
+  
+  # =========================
+  # 🔹 Create PR
+  # =========================
+      - name: Create Pull Request
+        if: env.skip_pr != 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: ${{ env.FIX_BRANCH }}
+          base: main
+          title: "🔐 AI Secret Fix"
+          commit-message: "AI Secret Fix Applied"
+# =========================
+# 🔹 4. RESCAN
+# =========================
+  rescan:
+    runs-on: ubuntu-latest
+    needs: ai-secret-fix
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Semgrep
+        run: pip install semgrep jq
+
+      - name: Re-run Scan
+        run: |
+          semgrep --config=auto . --json > after.json || echo '{"results":[]}' > after.json
+
+      - name: Compare Results
+        run: |
+          BEFORE=$(jq '.results | length' reports/before.json 2>/dev/null || echo 0)
+          AFTER=$(jq '.results | length' after.json)
+
+          echo "Before: $BEFORE"
+          echo "After : $AFTER"
+
+          if [ "$AFTER" -gt 0 ]; then
+            echo "⚠️ Vulnerabilities still exist"
+            exit 1
+          else
+            echo "✅ All critical issues resolved"
+          fi
+  
+      - name: Upload After Scan
+        uses: actions/upload-artifact@v4
+        with:
+          name: after-report
+          path: after.json
+
+  # =========================
+# 🔹 5. FINAL COMPARISON REPORT
+# =========================
+  compare-report:
+    runs-on: ubuntu-latest
+    needs: [semgrep, rescan]
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: semgrep-report
+          path: reports
+
+      - name: Download After Scan
+        run: |
+          # Ensure after.json exists (from rescan job)
+          if [ ! -f after.json ]; then
+            echo '{"results":[]}' > after.json
+          fi
+
+      - name: Compare Before vs After
+        run: |
+          BEFORE_FILE="reports/before.json"
+          AFTER_FILE="after.json"
+
+          # =========================
+          # 🔹 BEFORE COUNTS
+          # =========================
+          B_CRITICAL=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' $BEFORE_FILE 2>/dev/null || echo 0)
+          B_HIGH=$(jq '[.results[] | select(.extra.severity=="WARNING")] | length' $BEFORE_FILE 2>/dev/null || echo 0)
+          B_MEDIUM=$(jq '[.results[] | select(.extra.severity=="INFO")] | length' $BEFORE_FILE 2>/dev/null || echo 0)
+          B_TOTAL=$(jq '.results | length' $BEFORE_FILE 2>/dev/null || echo 0)
+
+          # =========================
+          # 🔹 AFTER COUNTS
+          # =========================
+          A_CRITICAL=$(jq '[.results[] | select(.extra.severity=="ERROR")] | length' $AFTER_FILE 2>/dev/null || echo 0)
+          A_HIGH=$(jq '[.results[] | select(.extra.severity=="WARNING")] | length' $AFTER_FILE 2>/dev/null || echo 0)
+          A_MEDIUM=$(jq '[.results[] | select(.extra.severity=="INFO")] | length' $AFTER_FILE 2>/dev/null || echo 0)
+          A_TOTAL=$(jq '.results | length' $AFTER_FILE 2>/dev/null || echo 0)
+
+          # =========================
+          # 🔹 CALCULATE FIXED
+          # =========================
+          FIXED=$((B_TOTAL - A_TOTAL))
+
+          echo ""
+          echo "🚨 AI FIX COMPARISON REPORT"
+          echo "======================================"
+
+          echo "📊 BEFORE FIX"
+          echo "CRITICAL : $B_CRITICAL"
+          echo "HIGH     : $B_HIGH"
+          echo "MEDIUM   : $B_MEDIUM"
+          echo "TOTAL    : $B_TOTAL"
+
+          echo ""
+          echo "📊 AFTER FIX"
+          echo "CRITICAL : $A_CRITICAL"
+          echo "HIGH     : $A_HIGH"
+          echo "MEDIUM   : $A_MEDIUM"
+          echo "TOTAL    : $A_TOTAL"
+
+          echo ""
+          echo "✅ FIXED ISSUES: $FIXED"
+          echo "======================================"
+
+          # Optional: fail if nothing improved
+          if [ "$FIXED" -le 0 ]; then
+            echo "⚠️ No vulnerabilities were reduced"
+            exit 1
+          fi
+
+# =========================
+# 🔹 FINAL REPORT
+# =========================
+  report:
+    runs-on: ubuntu-latest
+    needs: [semgrep, rescan ,dependency, ai-secret-fix]
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: semgrep-report
+          path: reports
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: after-report
+
+      - name: Compare Results
+        run: |
+          BEFORE=$(jq '.results | length' reports/before.json)
+          AFTER=$(jq '.results | length' after.json)
+
+          FIXED=$((BEFORE - AFTER))
+
+          echo "🚨 AI FIX REPORT"
+          echo "------------------------"
+          echo "Before : $BEFORE"
+          echo "After  : $AFTER"
+          echo "Fixed  : $FIXED"
+
+          echo ""
+          echo "📂 Changed Files:"
+          git diff --name-only HEAD~1 HEAD || true

@@ -1,0 +1,124 @@
+name: DevSecOps-git-commit
+
+on:
+  push:
+  pull_request:
+
+env:
+  REPORT_DIR: reports
+  FIX_DIR: ai-fixes
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  pull-requests: write
+
+jobs:
+  commit-ai-fix:
+    runs-on: ubuntu-latest
+    #needs: validate-ai-fix
+  
+    #if: needs.validate-ai-fix.outputs.validation_status == 'FAILED'
+  
+    permissions:
+      contents: write
+      issues: write
+  
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Upload AI Fixed Code
+        uses: actions/upload-artifact@v4
+        with:
+              name: ai-fixed-code   # ✅ MUST MATCH download name
+              path: |
+                .github/workflows/release.yml
+                config/.env
+
+      - name: Download AI Fixed Code
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-fixed-code
+          path: .
+
+
+# =========================
+# 🔹 Commit & Push
+# =========================
+      - name: Commit AI Fix Changes
+        run: |
+          set -e
+      
+          ########################################
+          # 🔹 DEFINE VARIABLES (CRITICAL)
+          ########################################
+          #FILE=".github/workflows/release.yml"
+          #ENV_PATH="config/.env"
+      
+          BUILD_NO="${GITHUB_RUN_NUMBER}"
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          FIX_BRANCH="ai-fix/build-${BUILD_NO}-${SHORT_SHA}"
+      
+          echo "Branch: $FIX_BRANCH"
+      
+          ########################################
+          # 🔹 CONFIGURE GIT
+          ########################################
+          git config user.name "SumangalaBhat"
+          git config user.email "sumangala.bhat18@gmail.com"
+      
+          ########################################
+          # 🔹 CREATE BRANCH (YOU WERE MISSING THIS)
+          ########################################
+          git checkout -b "$FIX_BRANCH"
+      
+          ########################################
+          # 🔹 ADD FILES
+          ########################################
+          echo "📦 Staging files..."
+      
+          if [ -f "$FILE" ]; then
+            git add "$FILE"
+          fi
+      
+          if [ -f "$ENV_PATH" ]; then
+            git add -f "$ENV_PATH"
+          fi
+      
+          ########################################
+          # 🔹 CHECK CHANGES
+          ########################################
+          if git diff --cached --quiet; then
+            echo "⚠️ No changes to commit"
+            exit 0
+          fi
+      
+          ########################################
+          # 🔹 COMMIT
+          ########################################
+          git commit -m "🤖 AI Fix
+      
+          File: $FILE
+          Build: $BUILD_NO
+      
+          ✔ Secrets moved to .env
+          ✔ AI remediation applied
+          "
+      
+          echo "✅ Commit created"
+      
+      - name: Push Branch
+        run: |
+          set -e
+      
+          BUILD_NO="${GITHUB_RUN_NUMBER}"
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          FIX_BRANCH="ai-fix/build-${BUILD_NO}-${SHORT_SHA}"
+      
+          echo "🚀 Pushing branch: $FIX_BRANCH"
+      
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} "$FIX_BRANCH"
+      
+          echo "✅ Branch pushed successfully"

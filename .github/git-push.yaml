@@ -1,0 +1,89 @@
+name: DevSecOps-git-commit
+
+on:
+  push:
+  pull_request:
+
+env:
+  REPORT_DIR: reports
+  FIX_DIR: ai-fixes
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+  pull-requests: write
+
+jobs:
+commit-ai-fix:
+  runs-on: ubuntu-latest
+  #needs: validate-ai-fix
+
+  if: needs.validate-ai-fix.outputs.validation_status == 'FAILED'
+
+  permissions:
+    contents: write
+    issues: write
+
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Create Branch + Commit
+      run: |
+        set +e
+
+        ########################################
+        # 🔹 METADATA
+        ########################################
+        BUILD_NO="${GITHUB_RUN_NUMBER}"
+        SHORT_SHA=$(git rev-parse --short HEAD)
+        DATE=$(date +"%Y-%m-%d_%H-%M-%S")
+
+        BRANCH="ai-fix/build-${BUILD_NO}-${SHORT_SHA}"
+
+        ########################################
+        # 🔹 CONFIGURE GIT
+        ########################################
+        git config user.name "AI Security Bot"
+        git config user.email "ai-bot@users.noreply.github.com"
+
+        ########################################
+        # 🔹 CREATE BRANCH
+        ########################################
+        git checkout -b "$BRANCH"
+
+        ########################################
+        # 🔥 EXCLUDE WORKFLOW FILES (IMPORTANT)
+        ########################################
+        git add -A
+        git reset .github/workflows || true
+
+        ########################################
+        # 🔹 CHECK CHANGES
+        ########################################
+        if git diff --cached --quiet; then
+          echo "⚠️ No changes to commit"
+          exit 0
+        fi
+
+        ########################################
+        # 🔹 COMMIT
+        ########################################
+        git commit -m "🔐 AI Security Fix
+
+        Build No   : $BUILD_NO
+        Commit SHA : $SHORT_SHA
+        Date       : $DATE
+
+        ✔ AI remediation applied
+        ✔ Safe commit (no workflow changes)
+        "
+
+        ########################################
+        # 🔹 PUSH (PAT REQUIRED)
+        ########################################
+        git push https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }} "$BRANCH"
+
+        echo "✅ Code pushed to $BRANCH"
