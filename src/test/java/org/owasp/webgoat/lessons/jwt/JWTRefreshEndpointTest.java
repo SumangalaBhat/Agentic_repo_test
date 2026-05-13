@@ -52,7 +52,7 @@ public class JWTRefreshEndpointTest extends LessonTest {
     // Now create a new refresh token for Tom based on Toms old access token and send the refresh
     // token of Jerry
     String accessTokenTom =
-        "eyJhbGciOiJIUzUxMiJ9.eyJpYXQiOjE1MjYxMzE0MTEsImV4cCI6MTUyNjIxNzgxMSwiYWRtaW4iOiJmYWxzZSIsInVzZXIiOiJUb20ifQ.DCoaq9zQkyDH25EcVWKcdbyVfUL4c9D4jRvsqOqvi9iAd4QuqmKcchfbU8FNzeBNF9tLeFXHZLU4yRkq-bjm7Q";
+        "System.getenv("JWT_TOKEN_ENV")";
     Map<String, Object> refreshJson = new HashMap<>();
     refreshJson.put("refresh_token", refreshToken);
     result =
@@ -98,7 +98,7 @@ public class JWTRefreshEndpointTest extends LessonTest {
   @Test
   void checkoutWithTomsTokenFromAccessLogShouldFail() throws Exception {
     String accessTokenTom =
-        "eyJhbGciOiJIUzUxMiJ9.eyJpYXQiOjE1MjYxMzE0MTEsImV4cCI6MTUyNjIxNzgxMSwiYWRtaW4iOiJmYWxzZSIsInVzZXIiOiJUb20ifQ.DCoaq9zQkyDH25EcVWKcdbyVfUL4c9D4jRvsqOqvi9iAd4QuqmKcchfbU8FNzeBNF9tLeFXHZLU4yRkq-bjm7Q";
+        "System.getenv("JWT_TOKEN_ENV")";
     mockMvc
         .perform(
             MockMvcRequestBuilders.post("/JWT/refresh/checkout")
