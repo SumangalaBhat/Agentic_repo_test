@@ -98,7 +98,7 @@ jobs:
         with:
           path: site
 
-      - uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@v5
 
 
 # =========================
@@ -618,6 +618,6 @@ jobs:
   
     steps:
       - name: Deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
         with:
           artifact_name: final-report-pages
