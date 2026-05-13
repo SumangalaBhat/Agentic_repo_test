@@ -119,12 +119,12 @@ jobs:
     needs: [semgrep, dependency, git-analysis]
   
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: semgrep-report
           path: reports
   
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dependency-report
           path: reports
@@ -232,7 +232,7 @@ jobs:
         with:
           fetch-depth: 0
   
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: semgrep-report
           path: reports
@@ -421,7 +421,7 @@ jobs:
     needs: [semgrep, rescan]
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: semgrep-report
           path: reports
@@ -494,12 +494,12 @@ jobs:
     needs: [semgrep, rescan ,dependency, ai-secret-fix]
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: semgrep-report
           path: reports
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: after-report
 

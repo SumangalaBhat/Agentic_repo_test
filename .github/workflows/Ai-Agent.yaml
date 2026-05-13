@@ -77,7 +77,7 @@ jobs:
     needs: [semgrep, dependency]
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: semgrep-report
           path: reports
@@ -116,7 +116,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: semgrep-report
           path: reports
@@ -473,7 +473,7 @@ jobs:
     needs: ai-fix
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fixed-code
           path: fixed
@@ -501,15 +501,15 @@ jobs:
     needs: [summary-before, rescan, ai-fix]
   
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: before-count
   
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: after-count
   
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fixed-code
           path: fixed
@@ -549,15 +549,15 @@ jobs:
       # -----------------------------
       # Download required artifacts
       # -----------------------------
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: before-count
   
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: after-count
   
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fixed-code
           path: fixed
